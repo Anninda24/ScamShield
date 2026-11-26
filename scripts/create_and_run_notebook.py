@@ -14,26 +14,51 @@ def read_src(path: str) -> str:
         return f.read()
 
 
+def strip_local_imports(code: str) -> str:
+    prefixes = (
+        "from preprocess import",
+        "from synth import",
+        "from synth_v2 import",
+        "from noise import",
+        "from validate_submission import",
+        "from phase2_pipeline import",
+    )
+    lines = []
+    skip_block = False
+    for line in code.splitlines():
+        if any(line.startswith(p) for p in prefixes):
+            if "(" in line and ")" not in line:
+                skip_block = True
+            continue
+        if skip_block:
+            if ")" in line:
+                skip_block = False
+            continue
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def build_notebook():
     nb = nbf.v4.new_notebook()
     cells = []
 
     # 1. Title & Declaration Markdown Cell
     cells.append(nbf.v4.new_markdown_cell(
-        "# ScamShield BD — Phase 2 Solution (Synthetic Data, Noise Augmentation & Honest Validation)\n"
+        "# ScamShield BD — Phase 3A Solution (Expanded Scenarios, Paraphrases & Cross-Scenario Check)\n"
         "**Team Name:** Shield\n\n"
         "## Declaration\n"
         "- **Required Libraries & Versions:** `python==3.14.1`, `numpy==2.5.1`, `pandas==3.1.1`, `scipy==1.18.1`, `scikit-learn==1.9.1`, `python-dotenv==1.2.4`\n"
-        "- **External Datasets:** None. Training uses only `sample.csv` plus programmatically generated synthetic/noisy data.\n"
+        "- **External Datasets:** None. Training uses only `sample.csv` plus programmatically generated synthetic/noisy/paraphrased data.\n"
         "- **Pretrained Models:** None.\n"
         "- **APIs Used:** None (no API calls; `.env` is empty).\n"
-        "- **Data Generation & Augmentation:** Compositional slot-filling generator (`6,000` rows across English/Bangla/Banglish/Mixed, ~29% multi-turn, hard-negative pairs, real + invented brands) + adversarial noise augmenter (`~30%` of synthetic rows + noisy copies of the `86` real rows) using `SEED = 42`. No rows, labels, or predictions from `test.csv` are ever used in training or augmentation.\n"
+        "- **Data Generation & Augmentation:**\n"
+        "  - Expanded compositional generator (`data/synthetic_v2.csv`, `15,000` rows): 21 scenarios in Class 0, 16 in Class 1, 15 in Class 2, 15 in Class 3, 15 in Class 4, 20 in Class 5 across English/Bangla/Banglish/Mixed (~25% each), ~31.5% multi-turn, ~30.5% noisy (`apply_noise`), hard-negative contrast twins, plus `860` paraphrase variants (`10` per `sample.csv` row, `source='real_paraphrase'`).\n"
+        "  - No rows, labels, or predictions from `test.csv` are ever used in training or augmentation.\n"
         "- **Methodology & Validation Strategy:**\n"
-        "  - *Preprocessing:* Unicode NFKC normalization; removal of `\\u200b`, `\\u200c`, `\\ufeff` (preserving `\\u200d` ZWJ for Bangla); Cyrillic/Greek-to-Latin homoglyph mapping; Latin-only lowercasing; defanged URL replacement (`[URL]`); digit-run replacement (`[NUM]`); `|||` separator preservation.\n"
-        "  - *Features:* `TfidfVectorizer(analyzer='char_wb', ngram_range=(2, 5), sublinear_tf=True)` + `TfidfVectorizer(analyzer='word', ngram_range=(1, 2), sublinear_tf=True)` combined via `scipy.sparse.hstack`.\n"
-        "  - *Models:* Task A (`LogisticRegression(class_weight='balanced')`), Task B (`OneVsRestClassifier(LogisticRegression(class_weight='balanced'))`, threshold `0.5`), Task C (`LogisticRegression(class_weight='balanced')`) trained on real (`5x` weight) + noisy real (`3x` weight) + synthetic (`1x` weight).\n"
-        "  - *Post-Processing:* `label == 0 -> techniques = 'NONE', action = 0`; non-zero labels with empty technique sets fall back to the single highest-probability technique; sorted `|`-joined codes; confidence = max predicted Task A probability clipped to `[0.05, 0.98]` and rounded to 4 decimals.\n"
-        "  - *Honest Validation:* Evaluated on CLEAN and NOISY sets across (a) real-only 5-fold CV, (b) synthetic-only -> real 86 rows, (c) 5-fold CV on real with synthetic in train folds, and (d) `StratifiedGroupKFold` on synthetic grouped by `family_id`.\n"
+        "  - *Preprocessing:* Unicode NFKC normalization; removal of `\\u200b`, `\\u200c`, `\\ufeff` (preserving `\\u200d` ZWJ for Bangla); Cyrillic/Greek-to-Latin homoglyph mapping; Latin-only lowercasing; `[URL]` and `[NUM]` tokens; `|||` preservation.\n"
+        "  - *Features & Models:* `char_wb` `(2, 5)` + `word` `(1, 2)` TF-IDF (`sublinear_tf=True`) + `LogisticRegression(class_weight='balanced')` for Task A & C, `OneVsRestClassifier(LogisticRegression(class_weight='balanced'))` for Task B.\n"
+        "  - *Validation:* Scenario-held-out `StratifiedGroupKFold`, real-row check (`synthetic_v2` only & 5-fold with train-fold paraphrases only), and cross-scenario cosine leakage check.\n"
+        "  - *Final Model:* Trained on `sample.csv` (`5x` weight) + `data/synthetic_v2.csv` (`1x` weight), outputting `submission_phase3a.csv`.\n"
         "- **Random Seeds:** `SEED = 42` for `random`, `numpy`, and `sklearn`.\n"
         "- **How to Reproduce:** Place `sample.csv`, `test.csv`, and `sample_submission.csv` in the working directory (or `./data/`) and run all cells top to bottom.\n"
     ))
@@ -53,6 +78,7 @@ def build_notebook():
         "from sklearn.multiclass import OneVsRestClassifier\n"
         "from sklearn.model_selection import StratifiedKFold, StratifiedGroupKFold\n"
         "from sklearn.metrics import f1_score, confusion_matrix\n"
+        "from sklearn.preprocessing import normalize\n"
         "from dotenv import load_dotenv\n"
         "\n"
         "load_dotenv()\n"
@@ -66,50 +92,50 @@ def build_notebook():
         "print('Environment ready. SEED =', SEED, '| DATA_DIR =', DATA_DIR)\n"
     ))
 
-    # 3. Inline src/preprocess.py
+    # 3. Preprocessing
     cells.append(nbf.v4.new_markdown_cell("## 1. Preprocessing"))
     prep_code = read_src("src/preprocess.py").split("if __name__")[0].strip()
     cells.append(nbf.v4.new_code_cell(prep_code + "\n\nrun_unit_tests()\n"))
 
-    # 4. Inline src/noise.py
+    # 4. Noise Augmenter
     cells.append(nbf.v4.new_markdown_cell("## 2. Noise Augmenter"))
     noise_code = read_src("src/noise.py").split("if __name__")[0].strip()
     cells.append(nbf.v4.new_code_cell(noise_code))
 
-    # 5. Inline src/synth.py
-    cells.append(nbf.v4.new_markdown_cell("## 3. Compositional Synthetic Data Generator"))
-    synth_code = read_src("src/synth.py").split("if __name__")[0].strip()
-    cells.append(nbf.v4.new_code_cell(synth_code))
+    # 5. V1 + V2 Synthetic Generators
+    cells.append(nbf.v4.new_markdown_cell("## 3. Expanded Compositional Synthetic Generator (`synth_v2`)"))
+    synth_v1_code = read_src("src/synth.py").split("if __name__")[0].strip()
+    synth_v2_code = strip_local_imports(read_src("src/synth_v2.py").split("if __name__")[0].strip())
+    cells.append(nbf.v4.new_code_cell(synth_v1_code + "\n\n" + synth_v2_code))
 
-    # 6. Inline Phase 2 Honest Validation, Training & Prediction
-    cells.append(nbf.v4.new_markdown_cell("## 4. Honest Validation, Phase 2 Training, Prediction & Validation"))
-    pipe_code = read_src("src/phase2_pipeline.py")
-    # Remove local module imports since everything is inlined above
-    lines = []
-    for line in pipe_code.splitlines():
-        if line.startswith("from preprocess import") or line.startswith("from synth import") or line.startswith("from noise import") or line.startswith("from validate_submission import"):
-            continue
-        lines.append(line)
-    # Inline validate_submission helper
-    val_code = read_src("src/validate_submission.py").split("if __name__")[0].strip()
-    inline_val = val_code.replace("data_dir = get_data_dir()", "data_dir = DATA_DIR")
+    cells.append(nbf.v4.new_code_cell(
+        "df_v2 = generate_synthetic_v2(target_rows=15000, seed=SEED)\n"
+        "os.makedirs('data', exist_ok=True)\n"
+        "df_v2.to_csv('data/synthetic_v2.csv', index=False)\n"
+        "print('Generated data/synthetic_v2.csv:', df_v2.shape)\n"
+    ))
 
-    cells.append(nbf.v4.new_code_cell(inline_val + "\n\n" + "\n".join(lines)))
+    # 6. Helpers + Validator + Phase 3A Check & Prediction
+    cells.append(nbf.v4.new_markdown_cell("## 4. Validation, Phase 3A Checks, & `submission_phase3a.csv`"))
+    val_code = read_src("src/validate_submission.py").split("if __name__")[0].strip().replace("data_dir = get_data_dir()", "data_dir = DATA_DIR")
+    p2_helpers = strip_local_imports(read_src("src/phase2_pipeline.py").split("def run_phase2()")[0].strip())
+    p3a_code = strip_local_imports(read_src("src/phase3a_check.py"))
+    cells.append(nbf.v4.new_code_cell(val_code + "\n\n" + p2_helpers + "\n\n" + p3a_code))
 
     nb["cells"] = cells
     with open("notebook.ipynb", "w", encoding="utf-8") as f:
         nbf.write(nb, f)
-    print("Created Phase 2 notebook.ipynb. Executing top to bottom...")
+    print("Created Phase 3A notebook.ipynb. Executing top to bottom...")
 
-    pre_hash = sha256_file("submission_phase2.csv") if os.path.isfile("submission_phase2.csv") else None
-    client = NotebookClient(nb, timeout=600, kernel_name="python3")
+    pre_hash = sha256_file("submission_phase3a.csv") if os.path.isfile("submission_phase3a.csv") else None
+    client = NotebookClient(nb, timeout=900, kernel_name="python3")
     client.execute()
     with open("notebook.ipynb", "w", encoding="utf-8") as f:
         nbf.write(nb, f)
-    post_hash = sha256_file("submission_phase2.csv")
-    print("Notebook executed cleanly! submission_phase2.csv SHA-256:", post_hash)
+    post_hash = sha256_file("submission_phase3a.csv")
+    print("Notebook executed cleanly! submission_phase3a.csv SHA-256:", post_hash)
     if pre_hash:
-        print("Reproducibility check (matches src/phase2_pipeline.py submission_phase2.csv):", pre_hash == post_hash)
+        print("Reproducibility check (matches src/phase3a_check.py submission_phase3a.csv):", pre_hash == post_hash)
 
 
 if __name__ == "__main__":
