@@ -7,7 +7,7 @@ VALID_CODES = {"T1", "T2", "T3", "T4", "T5", "T6"}
 
 
 def get_data_dir():
-    return "data" if os.path.isdir("data") else "."
+    return "data" if os.path.isfile(os.path.join("data", "sample.csv")) else "."
 
 
 def check_techniques(val: str) -> bool:

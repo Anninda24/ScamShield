@@ -4,7 +4,7 @@ from collections import Counter
 
 
 def get_data_dir():
-    return "data" if os.path.isdir("data") else "."
+    return "data" if os.path.isfile(os.path.join("data", "sample.csv")) else "."
 
 
 def inspect():
