@@ -1,5 +1,8 @@
 import hashlib
+import json
 import os
+import re
+import shutil
 import sys
 import zipfile
 
@@ -8,6 +11,15 @@ from validate_submission import validate_submission
 
 ZIP_NAME = "NeuraHack_Preli_Shield.zip"
 REQUIRED_FILES = ["submission.csv", "notebook.ipynb", "README.md", ".env"]
+SECRET_PATTERNS = [
+    re.compile(r"sk-[A-Za-z0-9]{16,}"),
+    re.compile(r"AIza[0-9A-Za-z\-_]{20,}"),
+    re.compile(r"hf_[A-Za-z0-9]{16,}"),
+    re.compile(r"ghp_[A-Za-z0-9]{20,}"),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"C:\\Users\\", re.IGNORECASE),
+    re.compile(r"C:/Users/", re.IGNORECASE),
+]
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -19,8 +31,8 @@ def sha256_file(path: str) -> str:
         return sha256_bytes(f.read())
 
 
-def build_package(submission_path: str = "submission.csv"):
-    print(f"Validating {submission_path}...")
+def build_package(submission_path: str = "submission_v3.csv"):
+    print(f"Validating {submission_path} against test.csv and sample_submission.csv...")
     if not validate_submission(submission_path):
         print("ABORT: Submission validation failed.")
         sys.exit(1)
@@ -29,6 +41,18 @@ def build_package(submission_path: str = "submission.csv"):
         if not os.path.isfile(req):
             print(f"ABORT: Missing required file: {req}")
             sys.exit(1)
+
+    # Parse notebook.ipynb as JSON and check for API keys / local PC paths
+    with open("notebook.ipynb", "r", encoding="utf-8") as f:
+        nb_raw = f.read()
+    nb_json = json.loads(nb_raw)
+    n_cells = len(nb_json.get("cells", []))
+    print(f"notebook.ipynb JSON parsed successfully: {n_cells} cells.")
+    for pat in SECRET_PATTERNS:
+        if pat.search(nb_raw):
+            print(f"ABORT: Suspicious key or absolute path pattern found in notebook.ipynb: {pat.pattern}")
+            sys.exit(1)
+    print("Security & path check on notebook.ipynb: CLEAN (no API keys or PC paths found).")
 
     src_hash = sha256_file(submission_path)
 
@@ -47,9 +71,9 @@ def build_package(submission_path: str = "submission.csv"):
 
     print(f"\nCreated {ZIP_NAME} successfully.")
     print("ZIP contents:", names)
-    print(f"SHA-256 verified (byte-identical): {zip_sub_hash}")
+    print(f"SHA-256 of submission.csv in ZIP == {submission_path}: {zip_sub_hash}")
 
 
 if __name__ == "__main__":
-    sub_arg = sys.argv[1] if len(sys.argv) > 1 else "submission.csv"
+    sub_arg = sys.argv[1] if len(sys.argv) > 1 else "submission_v3.csv"
     build_package(sub_arg)
